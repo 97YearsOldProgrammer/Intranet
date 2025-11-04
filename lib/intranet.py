@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import gzip
+import math
 import sys
 import os
 import re
 import typing as tp
+from typing import List
 import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset, DataLoader, random_split
 
 from pathlib        import Path
@@ -17,10 +21,12 @@ from contextlib     import closing
 from dataclasses    import dataclass
 
 
+
 def anti(seq):
 	comp = str.maketrans('ACGTRYMKBDHVNacgtrymkbdhvn', 'TGCAYRKMVHDBNtgcayrkmvhdbn')
 	anti = seq.translate(comp)[::-1]
 	return anti
+
 
 
 #####################
@@ -387,28 +393,13 @@ def embed_whole_corpus(corpus, embeddings):
 
 
 class SplicingDataset(Dataset):
-    """
-    Dataset for splice site prediction or similar sequence classification.
-    
-    Parameters
-    ----------
-    corpus_file : str
-        Path to file with tokenized sequences (one per line, space-separated token IDs)
-    embeddings : dict
-        Dictionary mapping token_id (int) -> embedding vector (torch.Tensor)
-    labels_file : str
-        Path to file with labels (one per line, corresponding to each sequence)
-        Labels can be:
-        - Binary: 0/1 for classification
-        - Multi-class: 0,1,2,... for multi-class classification
-    """
 
     def __init__(self, corpus_file, embeddings, labels_file):
         self.embeddings = embeddings
         self.sentences = []
         self.labels = []
         
-        # embedding
+        # Load embeddings
         with open(corpus_file, 'r') as fp:
             for line in fp:
                 line = line.strip()
@@ -417,11 +408,14 @@ class SplicingDataset(Dataset):
                 tensor = embed_sentence(line, embeddings)  # (L, E)
                 self.sentences.append(tensor)
         
-        # Load labels
         with open(labels_file, 'r') as fp:
             for line in fp:
-                label = int(line.strip())
-                self.labels.append(label)
+                line = line.strip()
+                if not line:
+                    continue
+
+                label_seq = [int(x) for x in line.split()]
+                self.labels.append(label_seq)
         
         assert len(self.sentences) == len(self.labels), \
             f"Mismatch: {len(self.sentences)} sequences vs {len(self.labels)} labels"
@@ -431,7 +425,7 @@ class SplicingDataset(Dataset):
 
     def __getitem__(self, idx):
         x = self.sentences[idx]         # (L, E)
-        y = self.labels[idx]            # scalar
+        y = self.labels[idx]            # list of labels, length L
         length = len(x)                 # L
         return x, y, length
 
@@ -443,31 +437,8 @@ class SplicingDataset(Dataset):
 
 class IntraNet(nn.Module):
     """
-    CNN → BLSTM hybrid for embedded DNA sequences.
-
-    Input
-    -----
-    x : FloatTensor, shape (B, L, E)
-        B = batch size, L = sequence length (k-mer steps), E = embedding dim
-    lengths : Optional[LongTensor], shape (B,)
-        True (unpadded) lengths per sequence. If provided, we pack for LSTM.
-
-    Flow
-    ----
-    (B, L, E)
-      → unsqueeze channel → (B, 1, L, E)
-      → [Conv2d + BN + ReLU + MaxPool2d] × 3  (channels grow; H/W downsample)
-      → mean over embedding-axis (width) → (B, C, L')
-      → permute to time-major → (B, L', C)
-      → BiLSTM → (B, L', 2*H)
-      → temporal pooling (mean + max concat) → (B, 4*H)
-      → MLP head → logits (B, num_classes)
-
-    Notes
-    -----
-    - Uses manual 'same' padding for odd kernels to avoid version issues.
-    - If `lengths` is passed, it is downscaled through the pooling factors
-      and used with pack_padded_sequence for robust masking.
+    CNN → BLSTM hybrid for embedded DNA sequences with TOKEN-LEVEL classification.
+    Predicts one label (exon/intron) per token position.
     """
 
     def __init__(
@@ -486,20 +457,17 @@ class IntraNet(nn.Module):
         assert len(conv_channels) == len(kernel_sizes) == len(pool_sizes)
 
         self.embedding_dim = embedding_dim
-        self.pool_sizes = pool_sizes  # keep to rescale lengths along L axis
+        self.pool_sizes = pool_sizes
 
         # Convolutional Layer
         self.convs = nn.ModuleList()
         self.bns   = nn.ModuleList()
         self.pools = nn.ModuleList()
 
-        # 2D DNA picture have 1 channel
         in_ch = 1
 
         for out_ch, ksz, psz in zip(conv_channels, kernel_sizes, pool_sizes):
-            pad = self._same_pad(ksz)  # (pad_h, pad_w) for stride=1
-
-            # if BatchNorm2D bias=False
+            pad = self._same_pad(ksz)
             self.convs.append(nn.Conv2d(in_ch, out_ch, kernel_size=ksz, padding=pad, bias=False))
             self.bns.append(nn.BatchNorm2d(out_ch))
             self.pools.append(nn.MaxPool2d(kernel_size=psz))
@@ -514,22 +482,13 @@ class IntraNet(nn.Module):
             num_layers=     lstm_layers,
             batch_first=    True,
             bidirectional=  True,
-
-            # delete all previous layer
             dropout=        dropout if lstm_layers > 1 else 0.0,
         )
 
-        # Classifier Head
-        # 2 (fw and bw) * 2 (max and mean)
-        head_in         = 4 * lstm_hidden
-
-        # avoid overfitting mechanism
-        self.dropout    = nn.Dropout(dropout)
-        self.fc         = nn.Sequential(
-            nn.Linear(head_in, 256),
-            nn.ReLU(inplace=True),
-            nn.Linear(256, 256),
-            nn.Dropout(dropout),
+        # Token-level classifier (predicts for each timestep)
+        self.dropout = nn.Dropout(dropout)
+        self.token_classifier = nn.Sequential(
+            nn.Linear(2 * lstm_hidden, 256),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout),
             nn.Linear(256, num_classes),
@@ -537,30 +496,20 @@ class IntraNet(nn.Module):
 
     @staticmethod
     def _same_pad(kernel_hw: tuple) -> tuple:
-        """Return (pad_h, pad_w) that preserves H/W for stride=1 (odd kernels)."""
         kh, kw = kernel_hw
-        # Works best with odd kernels (3,5,7). For even kernels, output shrinks by 1.
         return (kh // 2, kw // 2)
 
     def _downscale_lengths(self, lengths: torch.Tensor) -> torch.Tensor:
-        """Propagate true lengths through the pooling pipeline along the L (height) axis."""
         L = lengths.clone()
         for (ph, pw) in self.pool_sizes:
-            # MaxPool2d with default stride=kernel_size halves (ceil) for odd lengths
             L = torch.div(L, ph, rounding_mode='floor')
-        # Ensure at least 1
         L = torch.clamp(L, min=1)
         return L
 
     def forward(self, x, lengths):
         """
-        (B, C, L', E')
-            B:  batch size
-            C:  number of convolution channels
-            L': downsampled sequence length
-            E': downsampled embedding dimension
-
-        returns logits: (B, num_classes)
+        Returns token-level logits: (B, L', num_classes)
+        where L' is the downsampled sequence length after CNN pooling
         """
         
         B = x.size(0)
@@ -568,36 +517,31 @@ class IntraNet(nn.Module):
         # Add channel → (B, 1, L, E)
         x = x.unsqueeze(1)
 
-        # Convolution Neural Network Layer
+        # CNN layers
         for conv, bn, pool in zip(self.convs, self.bns, self.pools):
             x = pool(F.relu(bn(conv(x))))  # (B, C, L', E')
 
-        # Mean over embedding domain (B, L', E')
-        x = x.mean(dim=3)
+        # Mean over embedding dimension
+        x = x.mean(dim=3)  # (B, C, L')
 
-        # Swap dimension for LSTM (B, E', L')
+        # Swap for LSTM: (B, L', C)
         x = x.permute(0, 2, 1).contiguous()
 
-        # Optional length-aware packing for BLSTM
+        # BLSTM with length-aware packing
         if lengths is not None:
             lens_ds = self._downscale_lengths(lengths.to(x.device))
-            # pack
             packed = nn.utils.rnn.pack_padded_sequence(
                 x, lens_ds.cpu(), batch_first=True, enforce_sorted=False
             )
             packed_out, _ = self.blstm(packed)
             out, _ = nn.utils.rnn.pad_packed_sequence(packed_out, batch_first=True)
-            # out: (B, L', 2*H); pad positions are zeros by default
         else:
             out, _ = self.blstm(x)  # (B, L', 2*H)
 
-        # Temporal pooling to fixed-length feature
-        mean_pool   = out.mean(dim=1)                # (B, 2*H)
-        max_pool    = out.max(dim=1).values          # (B, 2*H)
-        feats       = torch.cat([mean_pool, max_pool], dim=1)  # (B, 4*H)
-
-        # Head
-        logits = self.fc(self.dropout(feats))      # (B, num_classes)
+        # Apply token classifier to each timestep
+        # out: (B, L', 2*H) -> logits: (B, L', num_classes)
+        logits = self.token_classifier(self.dropout(out))
+        
         return logits
 
 
@@ -606,7 +550,22 @@ class IntraNet(nn.Module):
 ###################
 
 
+def collate_batch(batch):
+
+    sequences, labels, lengths = zip(*batch)
+    
+    # Pad sequences to max length in batch
+    padded_seqs     = pad_sequence(sequences, batch_first=True, padding_value=0.0)
+    # Pad labels also val=-100 tells CrossEntropyLoss to ignore these positions
+    label_tensors   = [torch.tensor(label_seq, dtype=torch.long) for label_seq in labels]
+    padded_labels   = pad_sequence(label_tensors, batch_first=True, padding_value=-100)
+    # Get original length for LSTM track
+    lengths = torch.tensor(lengths, dtype=torch.long)
+    
+    return padded_seqs, padded_labels, lengths
+
 def prepare_dataloaders(dataset, batch_size, test_split, num_workers, seed):
+    
     if not 0 <= test_split < 1:
         raise ValueError("test_split must be within [0, 1).")
 
@@ -648,8 +607,8 @@ def prepare_dataloaders(dataset, batch_size, test_split, num_workers, seed):
 
     return train_loader, test_loader
 
-
 def evaluate(model, dataloader, device, loss_fn):
+    
     if dataloader is None:
         return float("nan"), float("nan")
 
@@ -660,12 +619,12 @@ def evaluate(model, dataloader, device, loss_fn):
 
     with torch.no_grad():
         for inputs, targets, lengths in dataloader:
-            inputs = inputs.to(device)
+            inputs  = inputs.to(device)
             targets = targets.to(device)
             lengths = lengths.to(device)
 
-            logits = model(inputs, lengths)
-            loss = loss_fn(logits, targets)
+            logits  = model(inputs, lengths)
+            loss    = loss_fn(logits, targets)
 
             total_loss += loss.item() * targets.size(0)
             predictions = torch.argmax(logits, dim=1)

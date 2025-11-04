@@ -1,7 +1,7 @@
 
 import argparse
 import sys
-from lib import intranet as tk
+import intranet as tk
 
 parser = argparse.ArgumentParser(
     description="Tokenise FASTA/GFF annotations into a corpus for GloVe.")
@@ -21,10 +21,9 @@ parser.add_argument("--utr", action="store_true",
     help="Include UTR regions (5' and 3' UTRs) in transcripts.")
 parser.add_argument("-io","--include_orphan", action="store_true",
     help="Include single intron that exists in RNA Sequencing Data")
-
-
-
 arg = parser.parse_args()
+
+
 
 # Determine which feature types to include
 if arg.utr:  

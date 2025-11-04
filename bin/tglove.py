@@ -2,7 +2,6 @@
 import argparse
 from lib import util
 
-
 parser = argparse.ArgumentParser(
     description="Train GloVe word embeddings on a text corpus.")
 parser.add_argument("corpus", type=str,
@@ -29,9 +28,9 @@ parser.add_argument("--bn", type=int, default=2, choices=[0, 1, 2],
     help="Save output in binary format (0=text, 1=binary, 2=both) [%(default)s].")
 parser.add_argument("--vb", type=int, default=2, choices=[0, 1, 2],
     help="Verbosity level [%(default)s].")
-
-
 args = parser.parse_args()
+
+
 
 vocab_file              = "vocab.txt"
 cooccurrence_file       = "cooccurrence.bin"
