@@ -1,7 +1,7 @@
 
 import argparse
 import sys
-import intranet as tk
+from lib import intranet as tk
 
 parser = argparse.ArgumentParser(
     description="Tokenise FASTA/GFF annotations into a corpus for GloVe.")
@@ -15,8 +15,6 @@ parser.add_argument("--kmer", type=int, default=8,
     help="Size of the sliding k-mer window used for tokenisation [%(default)i].")
 parser.add_argument("--stride", type=int, default=3,
     help="Stride of the sliding window used in the tokenizer [%(default)i].")
-parser.add_argument("--unk", default="<UNK>", type=str,
-    help="Unknown token for unseen k-mers [%(default)s].")
 parser.add_argument("--utr", action="store_true",
     help="Include UTR regions (5' and 3' UTRs) in transcripts.")
 parser.add_argument("-io","--include_orphan", action="store_true",
@@ -88,8 +86,7 @@ print(f"Finished vocabulary generation: {len(vocabulary)} k-mers", flush=True)
 tokenizer = tk.KmerTokenizer(
     k=arg.kmer,
     stride=arg.stride,
-    vocabulary=vocabulary,
-    unk_token=arg.unk
+    vocabulary=vocabulary
 )
 
 # Tokenize transcripts

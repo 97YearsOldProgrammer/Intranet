@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-import intranet as it
+from lib import intranet as it
 
 parser = argparse.ArgumentParser(description="Train the IntraNet CNN+BLSTM model on tokenised genomic data.")
 parser.add_argument("corpus", type=str,
@@ -35,15 +35,31 @@ args = parser.parse_args()
 
 
 # Detect Trainning Device
+use_amp         = False
+autocast_ctx    = None
+scaler          = None
+
 if torch.cuda.is_available():
     device = torch.device("cuda")
     print("Using CUDA (NVIDIA GPU)")
+    # CUDA autocast + GradScaler
+    from torch.cuda.amp import autocast as cuda_autocast, GradScaler
+    autocast_ctx = cuda_autocast
+    scaler = GradScaler()
+    use_amp = True
+
 elif torch.backends.mps.is_available():
     device = torch.device("mps")
     print("Using MPS (Apple Silicon)")
+    # MPS autocast (no GradScaler typically needed)
+    from torch.amp import autocast as mps_autocast
+    autocast_ctx = lambda: mps_autocast('mps')  # context manager with backend string
+    scaler = None
+    use_amp = True
+
 else:
     device = torch.device("cpu")
-    print("Using CPU")
+    print("Using CPU (FP32)")
 
 # Loading embedding vector
 embeddings = it.parse_glove_matrix(args.embeddings)
@@ -56,6 +72,7 @@ embedding_dim = sample_vector.shape[-1]
 # Prepare Dataset
 dataset = it.SplicingDataset(args.corpus, embeddings, args.labels)
 
+# Creating label and prediction classes
 unique_labels   = sorted(set(dataset.labels))
 num_classes     = len(unique_labels)
 if num_classes < 2:
@@ -87,31 +104,55 @@ print(f"Trainable parameters: {trainable_params:,}")
 loss_fn     = nn.CrossEntropyLoss(ignore_index=-100)    # ignore label padding of -100
 optimiser   = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+# Monitor the Learning Rate
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimiser, mode='min', factor=0.5, patience=3, verbose=True
+)
+
 for epoch in range(1, args.epochs + 1):
     model.train()
     running_loss = 0.0
     running_examples = 0
 
     for inputs, targets, lengths in train_loader:
-        inputs = inputs.to(device)
+        inputs  = inputs.to(device)
         targets = targets.to(device)
         lengths = lengths.to(device)
 
-        optimiser.zero_grad()
-        logits = model(inputs, lengths)
-        loss = loss_fn(logits, targets)
-        loss.backward()
-        optimiser.step()
+        optimiser.zero_grad(set_to_none=True)
 
-        running_loss += loss.item() * targets.size(0)
-        running_examples += targets.size(0)
+        if use_amp:
+            with autocast_ctx():
+                logits = model(inputs, lengths)                   # (B, L', C)
+                loss = loss_fn(logits.permute(0, 2, 1), targets) # (B, C, L')
+            if scaler is not None:  # CUDA path
+                scaler.scale(loss).backward()
+                scaler.step(optimiser)
+                scaler.update()
+            else:  # MPS path (no scaler)
+                loss.backward()
+                optimiser.step()
+        else:
+            logits = model(inputs, lengths)
+            loss = loss_fn(logits.permute(0, 2, 1), targets)
+            loss.backward()
+            optimiser.step()
+
+        # Average loss per *token* actually used (ignoring -100)
+        valid_mask = (targets != -100)
+        batch_tokens = valid_mask.sum().item()
+        running_loss += loss.item() * batch_tokens
+        running_examples += batch_tokens
 
     train_loss = running_loss / running_examples if running_examples else float("nan")
+
+    # --- Validation ---
     test_loss, test_accuracy = it.evaluate(model, test_loader, device, loss_fn)
-    
-    log_message = f"Epoch {epoch:03d}: train_loss={train_loss:.4f}"
+
+    log_message = f"Epoch {epoch:03d}: train_loss={train_loss:.6f}"
     if not math.isnan(test_loss):
-        log_message += f", test_loss={test_loss:.4f}, test_acc={test_accuracy:.4f}"
+        log_message += f", test_loss={test_loss:.6f}, test_acc={test_accuracy:.4f}"
+        scheduler.step(test_loss)  # reduce LR on plateau
     print(log_message)
 
 # Save trained model

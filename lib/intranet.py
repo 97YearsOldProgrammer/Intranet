@@ -298,28 +298,21 @@ class KmerTokenizer:
     k           : int
     stride      : int = 1
     vocabulary  : list = None
-    unk_token   : str = None
 
     def __post_init__(self):
-        
-        # map allkmer with a int
+        # map all kmer with a int
         self.token2id = {token: idx for idx, token in enumerate(self.vocabulary)}
 
-        # map the unknown bps as last element
-        if self.unk_token is not None and self.unk_token not in self.token2id:
-            self.token2id[self.unk_token] = len(self.token2id)
-
     def __call__(self, seq):
-
         seq     = seq.upper()
         tokens  = []
 
         # sliding window algo
         for t in range(0, max(len(seq) - self.k + 1, 0), self.stride):
             token = seq[t:t+self.k]
-            tokens.append(self.token2id.get(token, self.token2id.get(self.unk_token, 0)))
-        if not tokens:
-            tokens.append(self.token2id.get(self.unk_token, 0))
+            if token in self.token2id:
+                tokens.append(self.token2id[token])
+        
         return tokens
 
 
@@ -358,7 +351,7 @@ def parse_glove_matrix(vectors):
             if not parts:
                 continue
             
-            idx     = int(parts[0])
+            idx = int(parts[0])
             vector  = torch.tensor([float(x) for x in parts[1:]], dtype=torch.float32)
             embeddings[idx] = vector
     
@@ -608,14 +601,13 @@ def prepare_dataloaders(dataset, batch_size, test_split, num_workers, seed):
     return train_loader, test_loader
 
 def evaluate(model, dataloader, device, loss_fn):
-    
     if dataloader is None:
         return float("nan"), float("nan")
 
     model.eval()
     total_loss = 0.0
+    total_tokens = 0
     total_correct = 0
-    total_examples = 0
 
     with torch.no_grad():
         for inputs, targets, lengths in dataloader:
@@ -623,14 +615,19 @@ def evaluate(model, dataloader, device, loss_fn):
             targets = targets.to(device)
             lengths = lengths.to(device)
 
-            logits  = model(inputs, lengths)
-            loss    = loss_fn(logits, targets)
+            logits  = model(inputs, lengths)                       # (B, L', C)
+            loss    = loss_fn(logits.permute(0, 2, 1), targets)    # (B, C, L')
 
-            total_loss += loss.item() * targets.size(0)
-            predictions = torch.argmax(logits, dim=1)
-            total_correct += (predictions == targets).sum().item()
-            total_examples += targets.size(0)
+            # Mask padding for accuracy
+            pred = torch.argmax(logits, dim=2)                     # (B, L')
+            mask = (targets != -100)
+            correct = (pred.eq(targets) & mask).sum().item()
+            tokens  = mask.sum().item()
 
-    avg_loss = total_loss / total_examples if total_examples else float("nan")
-    accuracy = total_correct / total_examples if total_examples else float("nan")
+            total_loss   += loss.item() * tokens
+            total_correct += correct
+            total_tokens  += tokens
+
+    avg_loss = total_loss / total_tokens if total_tokens else float("nan")
+    accuracy = total_correct / total_tokens if total_tokens else float("nan")
     return avg_loss, accuracy
