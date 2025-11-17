@@ -145,15 +145,6 @@ for epoch in range(1, args.epochs + 1):
         running_loss += loss.item() * batch_tokens
         running_examples += batch_tokens
 
-        # Print every N batches
-        if batch_idx % 50 == 0:
-            elapsed = time.time() - start_time
-            print(f"[Epoch {epoch}/{args.epochs}] "
-                  f"Batch {batch_idx}/{len(train_loader)} "
-                  f"Loss: {loss.item():.4f}  "
-                  f"Time: {elapsed:.1f}s")
-            start_time = time.time()  # reset timer for next interval
-
     train_loss = running_loss / running_examples if running_examples else float("nan")
 
     # --- Validation ---

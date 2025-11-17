@@ -553,6 +553,105 @@ class IntraNet(nn.Module):
         return logits
 
 
+class BiLSTM(nn.Module):
+    """BLSTM for vertical and horizontal scan"""
+    
+    def __init__(
+        self, 
+        c_in: int, 
+        hidden: int
+    ):
+        super().__init__()
+        self.vgru = nn.LSTM(input_size=c_in, hidden_size=hidden, batch_first=True, bidirectional=True)
+        self.hgru = nn.LSTM(input_size=2*hidden, hidden_size=hidden, batch_first=True, bidirectional=True)
+
+    def forward(self, x):
+        B, C, H, W = x.shape    # (B, C, H, W)
+
+        # vertical scan
+        v_in        = x.permute(0, 3, 2, 1).contiguous().view(B*W, H, C)    # (B*W, H, C)
+        v_out, _    = self.vgru(v_in)                                       # (B*W, H, 2h)
+        v_out       = v_out.view(B, W, H, -1).permute(0, 2, 1, 3)           # (B, H, W, 2h)
+
+        # horizontal scan
+        h_in        = v_out.contiguous().view(B*H, W, -1)                   # (B*H, W, 2h)
+        h_out, _    = self.hgru(h_in)                                       # (B*H, W, 2h)
+        h_out       = h_out.view(B, H, W, -1).permute(0, 3, 1, 2)           # (B, 2h, H, W)
+
+        return h_out
+
+
+class IntraNet2(nn.Module):
+    """
+    VGG-16 -> RNN scan through --> Transposed CNN upsampling --> Prediction
+    """
+
+    def __init__(
+        self,
+        embedding_dim:          int,
+        num_classes:            int,
+        lstm_hidden:            int = 256,
+        dropout:                float = 0.5,
+    ):
+        super().__init__()
+        self.embedding_dim = embedding_dim
+        self.num_classes   = num_classes
+        self.dropout       = nn.Dropout2d(dropout)
+
+        # VGG-16 encoder (not whole CNN layer)
+        self.encoder = nn.Sequential(
+            self._vgg_block(1,   64,  2),       # H -> H/2
+            self._vgg_block(64,  128, 2),       # H/2 -> H/4
+        )
+
+        # ReSeg layers
+        self.renet1 = BiLSTM(128, lstm_hidden)                    # 128 -> 2*lstm_hidden
+        self.renet2 = BiLSTM(2*lstm_hidden, lstm_hidden)          # 2*lstm_hidden -> 2*lstm_hidden
+        
+        # Transposed convolution (Upsmapling Layer)
+        self.upsample = nn.Sequential(
+            nn.ConvTranspose2d(2*lstm_hidden, 128, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        
+        # Final classifier
+        self.classifier = nn.Conv2d(64, num_classes, kernel_size=1)
+        
+    @staticmethod
+    def _vgg_block(c_in, c_out, n_convs):
+        layers = []
+        for i in range(n_convs):
+            layers += [
+                nn.Conv2d(c_in if i == 0 else c_out, c_out, kernel_size=3, padding=1, bias=True),
+                nn.ReLU(inplace=True),
+            ]
+        layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+        return nn.Sequential(*layers)
+
+    def forward(self, x, lengths=None):
+        
+        # x: (B, 1, H, W)
+        
+        # VGG encoding
+        x = self.encoder(x)                 # (B, 128, H/4, W/4)
+        
+        # ReSeg layers
+        x = self.renet1(x)                  # (B, 2*hidden, H/4, W/4)
+        x = self.dropout(x)
+        x = self.renet2(x)                  # (B, 2*hidden, H/4, W/4)
+        x = self.dropout(x)
+        
+        # Upsample to original resolution
+        x = self.upsample(x)                # (B, 64, H, W)
+        
+        # Classification
+        x = self.classifier(x)              # (B, num_classes, H, W)
+
+        return x
+
+    
 ###################
 #### Trainning ####
 ###################
