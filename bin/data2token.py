@@ -1,7 +1,10 @@
+"""
+this is data2token for small gene set
+"""
 
 import argparse
 import sys
-from lib import intranet as tk
+from lib import dataset as tk
 
 parser = argparse.ArgumentParser(
     description="Tokenise FASTA/GFF annotations into a corpus for GloVe.")
@@ -14,7 +17,8 @@ parser.add_argument("labels_op", type=str,
 # default is 6mer based on other popular tokenizer
 parser.add_argument("--kmer", type=int, default=6,
     help="Size of the sliding k-mer window used for tokenisation [%(default)i].")
-parser.add_argument("--stride", type=int, default=3,
+# default is 1stride based on other popular tokenizer
+parser.add_argument("--stride", type=int, default=1,
     help="Stride of the sliding window used in the tokenizer [%(default)i].")
 parser.add_argument("--utr", action="store_true",
     help="Include UTR regions (5' and 3' UTRs) in transcripts.")
@@ -25,7 +29,7 @@ arg = parser.parse_args()
 
 
 # Determine which feature types to include
-if arg.utr:  
+if arg.utr:
     feature_filter = {"exon", "intron", "three_prime_utr", "five_prime_utr"}
 else:
     feature_filter = {"exon", "intron"}

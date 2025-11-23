@@ -10,11 +10,11 @@ parser.add_argument("save_file", type=str,
     help="Output filename prefix for saving the trained vectors.")
 parser.add_argument("glove_dir", type=str, 
     help="Dir for GloVe Model [%(default)s].")
-parser.add_argument("--vc", type=int, default=2,
+parser.add_argument("--vc", type=int, default=10,
     help="Minimum word frequency to include in vocabulary [%(default)s].")
-parser.add_argument("--vs", type=int, default=100,
+parser.add_argument("--vs", type=int, default=256,
     help="Dimensionality of word embeddings [%(default)s].")
-parser.add_argument("--mi", type=int, default=15,
+parser.add_argument("--mi", type=int, default=150,
     help="Number of maximum training iterations [%(default)s].")
 parser.add_argument("--ws", type=int, default=15,
     help="Context window size (smaller=syntax, larger=semantics) [%(default)s].")
