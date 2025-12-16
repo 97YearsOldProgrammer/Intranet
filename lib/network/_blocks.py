@@ -688,8 +688,8 @@ class EncoderBlock(nn.Module):
     Encoder block with pre-norm architecture
     
     Structure:
-    - LayerNorm -> Self-Attention (standard or BigBird sparse) -> Residual
-    - LayerNorm -> FeedForward -> Residual
+        - LayerNorm -> Self-Attention (standard or BigBird sparse) -> Residual
+        - LayerNorm -> FeedForward -> Residual
     """
     
     def __init__(
@@ -709,7 +709,7 @@ class EncoderBlock(nn.Module):
         
         self.use_bigbird_sparse = use_bigbird_sparse
         
-        # Choose attention type
+        # Attention
         if use_bigbird_sparse:
             self.self_attn = BigBirdSparseAttention(
                 embed_dim=embed_dim,
@@ -760,7 +760,6 @@ class EncoderBlock(nn.Module):
 
 
 class Encoder(nn.Module):
-    """Encoder stack with shared relative position bias and optional BigBird sparse attention"""
     
     def __init__(
         self, 
@@ -778,7 +777,7 @@ class Encoder(nn.Module):
         super().__init__()
         
         self.use_bigbird_sparse = use_bigbird_sparse
-        self.use_alibi = use_alibi
+        self.use_alibi          = use_alibi
         
         # Only first layer computes position bias (not used with BigBird or ALiBi)
         # ALiBi is computed every layer (it's cheap - just a static bias)
@@ -802,17 +801,7 @@ class Encoder(nn.Module):
         self.dropout    = nn.Dropout(dropout)
     
     def forward(self, hidden_states, attention_mask=None):
-        """
-        Args:
-            hidden_states   : (B, L, D) input embeddings
-            attention_mask  : (B, 1, L, L) additive attention mask
-        
-        Returns:
-            hidden_states   : (B, L, D) encoded output
-        
-        Note: When using BigBird sparse attention, position_bias is not used.
-              Sequence length must be divisible by block_size.
-        """
+
         position_bias = None
         
         for layer in self.layers:
@@ -839,9 +828,9 @@ class DecoderBlock(nn.Module):
     Decoder block with pre-norm architecture
     
     Structure:
-    - LayerNorm -> Causal Self-Attention -> Residual
-    - LayerNorm -> Cross-Attention -> Residual
-    - LayerNorm -> FeedForward/MoE -> Residual
+        - LayerNorm -> Causal Self-Attention -> Residual
+        - LayerNorm -> Cross-Attention -> Residual
+        - LayerNorm -> FeedForward/MoE -> Residual
     """
     
     def __init__(
@@ -923,7 +912,7 @@ class DecoderBlock(nn.Module):
         )
         hidden_states = hidden_states + self.dropout(cross_output)
         
-        # Feed-forward (with optional MoE)
+        # Feed-forward
         normed = self.norm3(hidden_states)
         
         if self.use_moe:
@@ -979,19 +968,9 @@ class Decoder(nn.Module):
         self.dropout    = nn.Dropout(dropout)
     
     def forward(self, hidden_states, encoder_hidden_states, attention_mask=None, encoder_attention_mask=None):
-        """
-        Args:
-            hidden_states           : (B, L_dec, D) embedded decoder input
-            encoder_hidden_states   : (B, L_enc, D) encoder output
-            attention_mask          : (B, 1, L_dec, L_dec) causal + padding mask
-            encoder_attention_mask  : (B, 1, 1, L_enc) encoder padding mask
-        
-        Returns:
-            hidden_states           : (B, L_dec, D) decoded output
-            moe_aux_loss            : Total MoE load balancing loss (or None)
-        """
-        position_bias = None
-        total_moe_loss = 0.0 if self.use_moe else None
+
+        position_bias   = None
+        total_moe_loss  = 0.0 if self.use_moe else None
         
         for layer in self.layers:
             result = layer(
