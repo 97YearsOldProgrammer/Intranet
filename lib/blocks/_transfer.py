@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from transformers import AutoModel, AutoTokenizer
-from _blocks import BigBirdSparseAttention, EncoderBlock, Encoder, LayerNorm
+from lib.blocks._component import BigBirdSparseAttention, EncoderBlock, Encoder, LayerNorm
 
 
 def dnabert2tobigbird(

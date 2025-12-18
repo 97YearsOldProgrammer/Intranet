@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from lib.network import intranet as it
+from lib import nn as it
 
 parser = argparse.ArgumentParser(description="Train the IntraNet CNN+BLSTM model on tokenised genomic data.")
 parser.add_argument("corpus", type=str,

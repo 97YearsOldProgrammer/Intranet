@@ -392,26 +392,17 @@ class MoEFeedForward(nn.Module):
     
     Routes tokens to different expert networks based on learned gating.
     Uses top-k routing where each token is processed by k experts.
-    
-    Args:
-        embed_dim       : Input/output dimension
-        ff_dim          : Hidden dimension for each expert
-        num_experts     : Number of expert networks
-        top_k           : Number of experts to route each token to
-        dropout         : Dropout rate
-        activation      : Activation function
-        load_balance    : Weight for load balancing auxiliary loss
     """
     
     def __init__(
         self, 
-        embed_dim, 
-        ff_dim, 
-        num_experts=8, 
-        top_k=2, 
-        dropout=0.0, 
+        embed_dim,                  # Input/output dimension
+        ff_dim,                     
+        num_experts=8,              # Number of expert networks
+        top_k=2,                    # Number of experts to route each token to
+        dropout=0.0,                
         activation='gelu_new',
-        load_balance=0.01
+        load_balance=0.01           # Weight for load balancing auxiliary loss
     ):
         super().__init__()
         
@@ -840,8 +831,6 @@ class DecoderBlock(nn.Module):
         ff_dim, 
         dropout=0.0, 
         attn_dropout=0.0, 
-        has_relative_bias=True,
-        use_alibi=False,
         use_moe=False,
         num_experts=8,
         moe_top_k=2,
@@ -853,25 +842,25 @@ class DecoderBlock(nn.Module):
         
         # Self-attention
         self.self_attn = Attention(
-            embed_dim=embed_dim,
-            num_heads=num_heads,
-            dropout=attn_dropout,
-            is_decoder=True,
-            is_cross_attention=False,
-            has_relative_bias=has_relative_bias and not use_alibi,
-            use_alibi=use_alibi
+            embed_dim           =embed_dim,
+            num_heads           =num_heads,
+            dropout             =attn_dropout,
+            is_decoder          =True,
+            is_cross_attention  =False,
+            has_relative_bias   =False,
+            use_alibi           =False
         )
         self.norm1 = LayerNorm(embed_dim)
         
         # Cross-attention to encoder
         self.cross_attn = Attention(
-            embed_dim=embed_dim,
-            num_heads=num_heads,
-            dropout=attn_dropout,
-            is_decoder=True,
-            is_cross_attention=True,
-            has_relative_bias=False,
-            use_alibi=False  # No position bias for cross-attention
+            embed_dim           =embed_dim,
+            num_heads           =num_heads,
+            dropout             =attn_dropout,
+            is_decoder          =True,
+            is_cross_attention  =True,
+            has_relative_bias   =False,
+            use_alibi           =False
         )
         self.norm2 = LayerNorm(embed_dim)
         
@@ -888,9 +877,8 @@ class DecoderBlock(nn.Module):
         else:
             self.ff = FeedForward(embed_dim, ff_dim, dropout)
         
-        self.norm3  = LayerNorm(embed_dim)
-        
-        self.dropout = nn.Dropout(dropout)
+        self.norm3      = LayerNorm(embed_dim)
+        self.dropout    = nn.Dropout(dropout)
     
     def forward(self, hidden_states, encoder_hidden_states, attention_mask=None, encoder_attention_mask=None, position_bias=None):
         
@@ -898,8 +886,8 @@ class DecoderBlock(nn.Module):
         normed = self.norm1(hidden_states)
         attn_output, position_bias = self.self_attn(
             normed,
-            attention_mask=attention_mask,
-            position_bias=position_bias
+            attention_mask  =attention_mask,
+            position_bias   =position_bias
         )
         hidden_states = hidden_states + self.dropout(attn_output)
         
@@ -907,8 +895,8 @@ class DecoderBlock(nn.Module):
         normed = self.norm2(hidden_states)
         cross_output, _ = self.cross_attn(
             normed,
-            key_value_states=encoder_hidden_states,
-            attention_mask=encoder_attention_mask
+            key_value_states    =encoder_hidden_states,
+            attention_mask      =encoder_attention_mask
         )
         hidden_states = hidden_states + self.dropout(cross_output)
         
@@ -917,11 +905,11 @@ class DecoderBlock(nn.Module):
         
         if self.use_moe:
             ff_output, moe_aux_loss = self.ff(normed)
-            hidden_states = hidden_states + self.dropout(ff_output)
+            hidden_states           = hidden_states + self.dropout(ff_output)
             return hidden_states, position_bias, moe_aux_loss
         else:
-            ff_output = self.ff(normed)
-            hidden_states = hidden_states + self.dropout(ff_output)
+            ff_output       = self.ff(normed)
+            hidden_states   = hidden_states + self.dropout(ff_output)
             return hidden_states, position_bias, None
 
 
@@ -934,32 +922,31 @@ class Decoder(nn.Module):
         embed_dim, 
         num_heads, 
         ff_dim, 
-        dropout=0.0, 
-        attn_dropout=0.0,
-        use_alibi=False,
-        use_moe=False,
-        num_experts=8,
-        moe_top_k=2,
+        dropout         =0.0, 
+        attn_dropout    =0.0,
+        use_moe         =True,
+        num_experts     =8,
+        moe_top_k       =2,
         moe_load_balance=0.01
     ):
         super().__init__()
         
-        self.use_moe = use_moe
-        self.use_alibi = use_alibi
+        self.use_moe    = use_moe
+        self.use_alibi  = use_alibi
         
         self.layers = nn.ModuleList([
             DecoderBlock(
-                embed_dim=embed_dim,
-                num_heads=num_heads,
-                ff_dim=ff_dim,
-                dropout=dropout,
-                attn_dropout=attn_dropout,
-                has_relative_bias=(i == 0 and not use_alibi),
-                use_alibi=use_alibi,
-                use_moe=use_moe,
-                num_experts=num_experts,
-                moe_top_k=moe_top_k,
-                moe_load_balance=moe_load_balance
+                embed_dim           =embed_dim,
+                num_heads           =num_heads,
+                ff_dim              =ff_dim,
+                dropout             =dropout,
+                attn_dropout        =attn_dropout,
+                has_relative_bias   =False,
+                use_alibi           =False,
+                use_moe             =use_moe,
+                num_experts         =num_experts,
+                moe_top_k           =moe_top_k,
+                moe_load_balance    =moe_load_balance
             )
             for i in range(num_layers)
         ])
