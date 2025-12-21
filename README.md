@@ -31,7 +31,6 @@ For the first step of design such program is that we need a encoder-decoder tran
 Therefore, theoretically, for achieving this, there have to be a decoder part for generating (to transfer what have already learned) the ideal outputs.  
 
 
-
 ---
 
 
@@ -51,4 +50,36 @@ Beside, you also need hugging face transformer package to load the pre-trained m
 
 ```zsh
 conda install -c conda-forge transformers
-```     
+```
+
+
+---
+
+
+### Unsupervised pre-trainning
+
+Following the trainning convention of GPT, the first stage of trainning decoder is working on unsupervised pre-trainnning. To let the model capture basic understanding of words and semantic meaning of linguistics. In short, the ideal trainning would be input of DNA Sequence in tokenized format. After encoder transformer, those token would then feed into the decoder for later cross-attention to make autoregressive prediction to generate the whole GFF corpus. Ideally, this task should belongs to story completion in Natural Language Processing. The content of pre-trainning for such gene finder program is stayed inside Gong's mind as secret. But the public parameter for pre-trainnning is copied from public disclosed generative AI company.     
+
+| Parameter             | Concise Data       | Detailed Description
+| :-------------------: | :----------------: | :-------------------
+| **Optimizer**         | Adam               | Uses the Adam optimizer with specific hyperparameters for large-scale stability.
+| **Batch Size**        | 32k → 3.2M tokens  | Started at 32,000 tokens and gradually ramped up to 3.2 million tokens to stabilize early training.
+| **Learning Rate**     | 0.6 × 10⁻⁴         | The peak learning rate specifically tuned for the 175B parameter model size.
+| **LR Warmup**         | First 375M tokens  | A linear warmup period over the first 375 million tokens to prevent gradient divergence.
+| **LR Decay**          | Cosine to 10%      | Uses a cosine decay schedule, reducing the rate to 10% of its peak over 260 billion tokens.
+| **Weight Decay**      | 0.1                | Regularization term applied to the weights to prevent overfitting and improve generalization.
+| **Gradient Clipping** | 1.0                | Global norm clipping at 1.0 to handle high-variance gradients and ensure training stability.
+
+Since Gemini 3 pro and Claude don't have public disclosed for pre-trainning parameter and methodology. We just applied GPT-3 175B Model trainning parameter right away. Furthermore, there would be documentation on what kinda of species data we used to pre-train the model.  
+
+For Prokaryotics:    
+
+|  Species  |  Source   | Data
+| :-------: | :-------: | :---
+| E.Coli    |  NCBI     | GFF + FASTA
+|
+
+For Eukaryotics:  
+
+|  Species  |  Chromosome 
+| :-------: | :----------

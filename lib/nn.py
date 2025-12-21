@@ -84,15 +84,18 @@ class DPG(nn.Module):
             self.freeze_encoder_weights()
     
     def _init_decoder_weights(self):
-        """Initialize decoder weights with Xavier/Glorot uniform"""
+        """ Initialize decoder weights with Xavier/Glorot uniform """
         
         def _init_weights(module):
+            
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
                 if module.bias is not None:
                     nn.init.zeros_(module.bias)
+                    
             elif isinstance(module, nn.Embedding):
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                
             elif isinstance(module, nn.LayerNorm):
                 nn.init.ones_(module.weight)
                 if module.bias is not None:
@@ -102,7 +105,7 @@ class DPG(nn.Module):
         self.decoder_embed.apply(_init_weights)
         self.lm_head.apply(_init_weights)
         
-        print("✓ Decoder weights randomly initialized")
+        print("Decoder weights randomly initialized")
     
     def freeze_encoder_weights(self):
         """Freeze all encoder parameters"""
@@ -110,7 +113,7 @@ class DPG(nn.Module):
         for param in self.encoder.parameters():
             param.requires_grad = False
         self.freeze_encoder = True
-        print("✓ Encoder weights frozen")
+        print("Encoder weights frozen")
     
     def unfreeze_encoder_weights(self):
         """Unfreeze all encoder parameters for fine-tuning"""
