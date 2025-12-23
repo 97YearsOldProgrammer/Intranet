@@ -39,6 +39,35 @@ While getting the Pre-trained understanding about Genomic Sequnece. We shall kee
 
 ---
 
+### Dependencies
+
+The software require pytorch to build building blocks of nn.
+
+```zsh
+conda create -n nameyouwannaput
+conda install pytorch torchvision torchaudio -c pytorch -c conda-forge
+```
+
+Besides, it require the huggingface transformer model to get access to the DNABERT for their weights and tokenizer.
+
+```zsh
+conda install -c conda-forge transformers
+```
+
+**The packages below require the CUDA for running.**
+
+Furthermore, for optimizing the whole algorithm, such as Spare MoE and Spare Attention Mechanism. We need external packages to get access for creating own CUDA C++ Kernel and parallelism training. For creating custom CUDA Kernel, we need 
+
+```zsh
+conda install -c conda-forge triton
+```
+
+For parallelism training, we need optimizer packages DeepSpeed.
+
+```zsh
+conda install -c conda-forge deepspeed
+```
+
 
 ### Trainning nn
 
